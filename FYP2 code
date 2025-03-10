@@ -1,0 +1,133 @@
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <ThingSpeak.h>
+
+// Define analog input pins for FSRs
+const int fsrPins[] = {34, 39, 36}; 
+const int numFSRs = 3;
+
+// Define analog input pins for LM35 sensors
+const int lm35Pins[] = {33, 32, 35};
+const int numLM35s = 3;
+
+// WiFi credentials
+const char* ssid = "Muhammad Naufal Hakim’s iPhone";
+const char* password = "12345678";
+
+// ThingSpeak credentials
+unsigned long myChannelNumber = 2838258;  
+const char* myWriteAPIKey = "V6KS8N0X1QH7JXJM";
+
+// WiFi Client for ThingSpeak
+WiFiClient client;
+
+// Sensor reading storage
+float fsrPressure[numFSRs] = {0.0};
+float lm35Temperatures[numLM35s] = {0.0};
+
+// Constants for FSR Calculations
+const float VCC = 3.3;              // ESP32 ADC reference voltage
+const float R_PULLDOWN = 10000.0;   // 10kΩ pull-down resistor
+const float FSR_AREA = 0.000314;    // Approximate sensing area in square meters (m²)
+const float MIN_VOLTAGE = 0.05;     // Ignore noise below 50mV
+
+void connectWiFi() {
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to WiFi");
+
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(1000);
+    Serial.print(".");
+    attempts++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nConnected to WiFi!");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("\nFailed to connect to WiFi. Restarting...");
+    ESP.restart();
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("Starting ESP32...");
+
+  connectWiFi();
+  ThingSpeak.begin(client);
+}
+
+void loop() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi disconnected! Reconnecting...");
+    connectWiFi();
+  }
+
+  // Read LM35 temperature values
+  for (int i = 0; i < numLM35s; i++) {
+    int lm35Value = analogRead(lm35Pins[i]);
+    float voltage = lm35Value * (3300.0 / 4095.0);
+    lm35Temperatures[i] = voltage / 10.0;
+  }
+
+  // Read and calculate FSR pressure
+  for (int i = 0; i < numFSRs; i++) {
+    int fsrValue = analogRead(fsrPins[i]);
+    float voltage = (fsrValue / 4095.0) * VCC;
+
+    if (voltage < MIN_VOLTAGE) { 
+      fsrPressure[i] = 0; // No significant pressure detected
+    } else {
+      float fsrResistance = (VCC - voltage) * R_PULLDOWN / voltage; // Voltage divider formula
+
+      // Estimate force (adjust formula based on FSR type)
+      float fsrForce;
+      if (fsrResistance <= 1000) {
+        fsrForce = (fsrResistance / 80.0);
+      } else {
+        fsrForce = (fsrResistance / 30.0);
+      }
+
+      // Calculate pressure in kPa
+      fsrPressure[i] = (fsrForce / FSR_AREA) / 1000.0; 
+    }
+  }
+
+  // Print sensor values
+  Serial.println("LM35 Temperature Readings:");
+  for (int i = 0; i < numLM35s; i++) {
+    Serial.printf("LM35-%d: %.2f °C\n", i + 1, lm35Temperatures[i]);
+  }
+
+  Serial.println("FSR Pressure Readings:");
+  for (int i = 0; i < numFSRs; i++) {
+    Serial.printf("FSR-%d: %.2f kPa\n", i + 1, fsrPressure[i]);
+  }
+
+  // Ensure WiFi client is connected before sending data
+  if (!client.connect("api.thingspeak.com", 80)) {
+    Serial.println("Failed to connect to ThingSpeak! Retrying...");
+    return; // Skip sending data this loop
+  }
+
+  // Send data to ThingSpeak
+  for (int i = 0; i < numLM35s; i++) {
+    ThingSpeak.setField(i + 1, lm35Temperatures[i]);
+  }
+  for (int i = 0; i < numFSRs; i++) {
+    ThingSpeak.setField(i + 4, fsrPressure[i]);
+  }
+
+  int response = ThingSpeak.writeFields(myChannelNumber, myWriteAPIKey);
+  if (response == 200) {
+    Serial.println("Data sent successfully to ThingSpeak!");
+  } else {
+    Serial.print("Problem sending data. HTTP error code: ");
+    Serial.println(response);
+  }
+
+  delay(20000);  // ThingSpeak update limit: Every 15 seconds
+}
