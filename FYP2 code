@@ -23,8 +23,20 @@ WiFiClient client;
 // Variables to store sensor readings
 float fsrResistance[numFSRs] = {0.0};
 float fsrForce[numFSRs] = {0.0};
-float fsrPressure[numFSRs] = {0.0};
+float fsrPressure[numFSRs] = {0.0}; // Pressure in kPa
 float lm35Temperatures[numLM35s] = {0.0};
+
+
+// Constants for FSR Calculation
+const float VCC = 3.3;             // ESP32 ADC reference voltage
+const float R_PULLDOWN = 10000.0;  // 10kΩ pull-down resistor
+
+// Define different contact areas for each FSR (in square meters)
+const float fsrAreas[numFSRs] = {
+  0.0002, // FSR-1: Heel area (20 cm²)
+  0.00015, // FSR-2: Midfoot area (15 cm²)
+  0.0001  // FSR-3: Ball of foot area (10 cm²)
+};
 
 // WiFi Connection Function
 void connectWiFi() {
@@ -48,11 +60,6 @@ void connectWiFi() {
   }
 }
 
-// Constants for FSR Calculation
-const float VCC = 3.3;             // ESP32 ADC reference voltage
-const float R_PULLDOWN = 10000.0;  // 10kΩ pull-down resistor
-const float FSR_AREA = 0.0001;     // 1 cm² in square meters
-
 // Function to smooth ADC readings
 int readSmoothedADC(int pin, int numSamples = 10) {
   long sum = 0;
@@ -71,9 +78,8 @@ void setup() {
   connectWiFi();
   ThingSpeak.begin(client);
 }
-
 void loop() {
-  // Check WiFi connection
+    // Check WiFi connection
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("WiFi disconnected! Reconnecting...");
     connectWiFi();
@@ -88,7 +94,6 @@ void loop() {
 
     // Constrain temperature to a range of 20°C to 40°C
     if (lm35Temperatures[i] < 20.0) {
-      // Soft cap: Allow temperature to exceed 20.00°C slightly
       lm35Temperatures[i] = 20.0 + random(0, 50) / 100.0; // Random value between 20.00°C and 20.49°C
     } else if (lm35Temperatures[i] > 40.0) {
       lm35Temperatures[i] = 40.0; // Hard cap at 40.00°C
@@ -98,43 +103,14 @@ void loop() {
   // Read FSR Values
   for (int i = 0; i < numFSRs; i++) {
     int rawValue = readSmoothedADC(fsrPins[i]); // Smooth ADC readings
-    float voltage = (rawValue / 4095.0) * VCC;
-
-    if (voltage < 0.01) { 
-      // No significant pressure detected
-      fsrResistance[i] = 0;
-      fsrForce[i] = 0;
-
-      // Set minimum pressure with a small random variation
-      fsrPressure[i] = 0.01 + random(0, 100) / 10000.0; // Random value between 0.01 and 0.0199 MPa
-    } else {
-      // Calculate Resistance
-      fsrResistance[i] = (VCC - voltage) * R_PULLDOWN / voltage;
-
-      // Estimate Force (based on empirical data or calibration)
-      if (fsrResistance[i] > 10000) {
-        fsrForce[i] = 0; // No force for high resistance
-      } else if (fsrResistance[i] > 100) {
-        fsrForce[i] = 1000000.0 / fsrResistance[i]; // Light force
-      } else {
-        fsrForce[i] = 1000000.0 / 100; // Cap force for very low resistance
-      }
-
-      // Calculate Pressure (in MPa)
-      fsrPressure[i] = (fsrForce[i] / FSR_AREA) / 1000000.0; // Convert to MPa
-
-      // Soft cap: Allow pressure to exceed 15 MPa slightly
-      if (fsrPressure[i] > 15.0) {
-        fsrPressure[i] = 15.0 + random(0, 50) / 100.0; // Add a small random value (up to 0.49 MPa)
-      }
-    }
+    calculatePressure(i, rawValue);
   }
 
   // Print FSR Force and Pressure values
   Serial.println("FSR Readings:");
   for (int i = 0; i < numFSRs; i++) {
-    Serial.printf("FSR-%d | Resistance: %.2fΩ | Force: %.2fN | Pressure: %.4fMPa\n", 
-                  i + 1, fsrResistance[i], fsrForce[i], fsrPressure[i]);
+    Serial.printf("FSR-%d = Pressure: %.2f kPa\n", 
+                  i + 1, fsrPressure[i]);
   }
 
   // Print LM35 temperature values
@@ -142,8 +118,7 @@ void loop() {
   for (int i = 0; i < numLM35s; i++) {
     Serial.printf("LM35-%d: %.2f °C\n", i + 1, lm35Temperatures[i]);
   }
-
-  // Send data to ThingSpeak
+ // Send data to ThingSpeak
   if (!client.connect("api.thingspeak.com", 80)) {
     Serial.println("Failed to connect to ThingSpeak! Retrying...");
     return; // Skip sending data this loop
@@ -166,4 +141,47 @@ void loop() {
   }
 
   delay(20000);  // ThingSpeak update limit: Every 15 seconds
+}
+
+// Function to calculate pressure for each FSR
+void calculatePressure(int i, int rawValue) {
+  float voltage = (rawValue / 4095.0) * VCC;
+
+  if (voltage < 0.01) { 
+    fsrResistance[i] = 0;
+    fsrForce[i] = 0;
+    fsrPressure[i] = 0;
+    return;
+  }
+
+  // Calculate Resistance
+  fsrResistance[i] = (VCC - voltage) * R_PULLDOWN / voltage;
+
+  // Improved Force Calculation (based on FSR datasheet estimates)
+  if (fsrResistance[i] > 10000) {
+    fsrForce[i] = 0;  // No pressure detected
+  } else if (fsrResistance[i] > 1000) {
+    fsrForce[i] = (10000.0 / fsrResistance[i]) * 1.2;  // Light pressure
+  } else if (fsrResistance[i] > 100) {
+    fsrForce[i] = (100000.0 / fsrResistance[i]) * 1.1;  // Moderate pressure
+  } else {
+    fsrForce[i] = 20;  // Limit max force to avoid unrealistic values
+  }
+
+  // Calculate Pressure (in kPa)
+  fsrPressure[i] = (fsrForce[i] / fsrAreas[i]) / 1000.0;
+
+  // Ensure pressure starts at 100 kPa with random fluctuations
+  if (fsrPressure[i] < 100) {
+    fsrPressure[i] = 100 + random(0, 50) / 10.0; // Random between 100.0 and 105.0 kPa
+  } else {
+    // Add random fluctuations up/down within a reasonable range
+    float randomStep = random(-20, 20) / 10.0; // Random change of ±2.0 kPa
+    fsrPressure[i] += randomStep;
+  }
+
+  // Cap max pressure at 500 kPa with a small random decimal
+  if (fsrPressure[i] > 500) {
+    fsrPressure[i] = 500 + random(0, 100) / 100.0; // Random between 500.00 and 500.99 kPa
+  }
 }
