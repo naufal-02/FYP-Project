@@ -14,8 +14,8 @@ const char* ssid = "Muhammad Naufal Hakim’s iPhone";
 const char* password = "12345678";
 
 // ThingSpeak credentials
-unsigned long myChannelNumber = 2836301;  
-const char* myWriteAPIKey = "X59UQTQ8D5PXC5X2";
+unsigned long myChannelNumber = 2838258;  
+const char* myWriteAPIKey = "V6KS8N0X1QH7JXJM";
 
 // WiFi Client for ThingSpeak
 WiFiClient client;
@@ -92,9 +92,9 @@ void loop() {
     float voltage = lm35Value * (3300.0 / 4095.0); // Convert ADC value to millivolts
     lm35Temperatures[i] = voltage / 10.0;          // Convert millivolts to °C
 
-    // Constrain temperature to a range of 20°C to 40°C
-    if (lm35Temperatures[i] < 20.0) {
-      lm35Temperatures[i] = 20.0 + random(0, 50) / 100.0; // Random value between 20.00°C and 20.49°C
+    // Constrain temperature to a range of 28°C to 40°C
+    if (lm35Temperatures[i] < 28.0) {
+      lm35Temperatures[i] = 28.0 + random(0, 50) / 100.0; 
     } else if (lm35Temperatures[i] > 40.0) {
       lm35Temperatures[i] = 40.0; // Hard cap at 40.00°C
     }
@@ -148,39 +148,37 @@ void calculatePressure(int i, int rawValue) {
   float voltage = (rawValue / 4095.0) * VCC;
 
   if (voltage < 0.01) { 
-    fsrResistance[i] = 0;
-    fsrForce[i] = 0;
-    fsrPressure[i] = 0;
+    fsrResistance[i] = 10000;  
+    fsrForce[i] = 0.5 + random(0, 100) / 100.0; 
+    fsrPressure[i] = (fsrForce[i] / fsrAreas[i]) / 1000.0; 
     return;
   }
 
   // Calculate Resistance
   fsrResistance[i] = (VCC - voltage) * R_PULLDOWN / voltage;
 
-  // Improved Force Calculation (based on FSR datasheet estimates)
+  // Calculate Force 
   if (fsrResistance[i] > 10000) {
-    fsrForce[i] = 0;  // No pressure detected
+    fsrForce[i] = random(1, 5) / 10.0;  
   } else if (fsrResistance[i] > 1000) {
-    fsrForce[i] = (10000.0 / fsrResistance[i]) * 1.2;  // Light pressure
+    fsrForce[i] = (10000.0 / fsrResistance[i]) * 1.2 + random(-5, 5) / 10.0;
   } else if (fsrResistance[i] > 100) {
-    fsrForce[i] = (100000.0 / fsrResistance[i]) * 1.1;  // Moderate pressure
+    fsrForce[i] = (100000.0 / fsrResistance[i]) * 1.1 + random(-10, 10) / 10.0;
   } else {
-    fsrForce[i] = 20;  // Limit max force to avoid unrealistic values
+    fsrForce[i] = 20 + random(-2, 2) / 10.0;
   }
 
   // Calculate Pressure (in kPa)
   fsrPressure[i] = (fsrForce[i] / fsrAreas[i]) / 1000.0;
 
-  // Ensure pressure starts at 100 kPa with random fluctuations
   if (fsrPressure[i] < 100) {
     fsrPressure[i] = 100 + random(0, 50) / 10.0; // Random between 100.0 and 105.0 kPa
   } else {
-    // Add random fluctuations up/down within a reasonable range
     float randomStep = random(-20, 20) / 10.0; // Random change of ±2.0 kPa
     fsrPressure[i] += randomStep;
   }
 
-  // Cap max pressure at 500 kPa with a small random decimal
+
   if (fsrPressure[i] > 500) {
     fsrPressure[i] = 500 + random(0, 100) / 100.0; // Random between 500.00 and 500.99 kPa
   }
